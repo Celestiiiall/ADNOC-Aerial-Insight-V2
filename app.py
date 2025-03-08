@@ -1,71 +1,131 @@
 import streamlit as st
+import os
 import cv2
 import numpy as np
-import os
-import gdown
 from ultralytics import YOLO
-from pathlib import Path
 
-# ✅ Set up model download
-MODEL_URL = "https://drive.google.com/uc?id=YOUR_FILE_ID"  # Replace with actual Google Drive file ID
+# Set Streamlit page configuration
+st.set_page_config(
+    page_title="ADNOC Aerial Insight",
+    page_icon="🛰️",
+    layout="wide"
+)
+
+# Define paths for assets
+LOGO_SIDEBAR = "assets/ADNOC-Logo.jpg"
+LOGO_TOP = "assets/ADNOC-Logo.png"
+
+# Sidebar with ADNOC branding
+with st.sidebar:
+    st.image(LOGO_SIDEBAR, width=200)
+    st.markdown(
+        '<p style="text-align:center; font-size:14px;">Developed as part of ADNOC’s Analytics & Data Science Initiative.</p>',
+        unsafe_allow_html=True
+    )
+
+# Main Title & Header
+st.image(LOGO_TOP, use_container_width=True)  # Top Logo Banner
+st.markdown("## ADNOC Aerial Insight: Collision Detection Platform")
+st.write(
+    "Upload a video, and the system will analyze object movement, detect potential collisions, "
+    "and provide a downloadable processed output."
+)
+
+# File uploader
+uploaded_file = st.file_uploader(
+    "Upload a Video", type=["mp4", "avi", "mov", "mpg", "mpeg"]
+)
+
+# Load YOLO model (Ensure the model is in the same directory or accessible)
 MODEL_PATH = "bestt.pt"
 
 if not os.path.exists(MODEL_PATH):
-    st.info("Downloading model... This may take a moment.")
-    gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
+    st.error("Error: YOLO model file not found. Ensure `bestt.pt` is uploaded.")
+    st.stop()
 
-# ✅ Load YOLO model
 model = YOLO(MODEL_PATH)
 
-# ✅ Streamlit UI Configuration
-st.set_page_config(page_title="ADNOC Aerial Insight", layout="wide", page_icon="🛡️")
+# Collision Detection Parameters
+collision_threshold = 50  # Pixel distance for close collisions
+min_velocity_threshold = 5  # Minimum velocity for potential collision
+frame_buffer = 10  # Number of frames to consider for trajectory
 
-# ✅ Sidebar with ADNOC Logo
-st.sidebar.image("assets/adnoc-logo.jpg", use_column_width=True)
-st.sidebar.markdown("**Developed as part of ADNOC's Analytics & Data Science Initiative.**")
+# Process Uploaded Video
+if uploaded_file is not None:
+    st.video(uploaded_file)
 
-# ✅ Header with ADNOC Banner
-st.image("assets/adnoc-banner.jpg", use_column_width=True)
-st.title("ADNOC Aerial Insight: Collision Detection Platform")
-st.write("Upload a video, and the system will analyze object movement, detect collisions, and allow downloading the processed output.")
+    # Save file temporarily
+    video_ext = uploaded_file.name.split('.')[-1]
+    temp_video_path = f"temp_video.{video_ext}"
+    with open(temp_video_path, "wb") as f:
+        f.write(uploaded_file.read())
 
-# ✅ File Upload
-uploaded_video = st.file_uploader("Upload a Video", type=["mp4", "avi", "mov", "mpeg", "mpg"])
+    st.success("Video uploaded successfully! Processing...")
 
-# ✅ Process Uploaded Video
-if uploaded_video is not None:
-    # Save uploaded video
-    video_path = Path("uploaded_video.mp4")
-    with open(video_path, "wb") as f:
-        f.write(uploaded_video.read())
-
-    st.video(video_path)  # Show uploaded video
-
-    # Process video with YOLO + ByteTrack
-    st.info("Processing video... This may take some time.")
-    
-    results = model.track(source=str(video_path), persist=True, conf=0.3, iou=0.5, tracker="bytetrack.yaml")
-
-    # ✅ Save processed video
-    processed_video_path = "processed_output.mp4"
-    cap = cv2.VideoCapture(str(video_path))
+    # Open video for processing
+    cap = cv2.VideoCapture(temp_video_path)
     frame_width = int(cap.get(3))
     frame_height = int(cap.get(4))
     fps = int(cap.get(5))
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(processed_video_path, fourcc, fps, (frame_width, frame_height))
 
-    for result in results:
-        frame = result.orig_img
+    # Output video path
+    output_video_path = f"processed_{uploaded_file.name}"
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
+
+    object_paths = {}
+    object_velocities = {}
+
+    # Process each frame
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Run YOLO detection
+        results = model.track(source=frame, persist=True, conf=0.3, iou=0.5, tracker="bytetrack.yaml")
+
+        detections = results[0].boxes  # Get detected objects
+
+        for box in detections:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box
+            obj_id = int(box.id[0]) if box.id is not None else None
+
+            if obj_id is not None:
+                center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
+
+                # Store trajectory
+                if obj_id not in object_paths:
+                    object_paths[obj_id] = []
+                object_paths[obj_id].append((center_x, center_y))
+
+                # Limit trajectory history
+                object_paths[obj_id] = object_paths[obj_id][-frame_buffer:]
+
+                # Draw trajectory
+                for j in range(1, len(object_paths[obj_id])):
+                    alpha = j / len(object_paths[obj_id])
+                    color = (0, int(255 * (1 - alpha)), int(255 * alpha))
+                    cv2.line(frame, object_paths[obj_id][j - 1], object_paths[obj_id][j], color, 2)
+
+                # Draw bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(frame, f"ID {obj_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
+        # Write frame to output video
         out.write(frame)
-    
+
     cap.release()
     out.release()
 
-    # ✅ Show Processed Video
-    st.video(processed_video_path)
+    # Provide download link
+    with open(output_video_path, "rb") as f:
+        st.download_button(
+            label="Download Processed Video",
+            data=f,
+            file_name=output_video_path,
+            mime="video/mp4"
+        )
 
-    # ✅ Download Link
-    st.download_button(label="Download Processed Video", data=open(processed_video_path, "rb").read(), file_name="collision_output.mp4")
+    st.success("Processing complete! Download your video above.")
 
-st.success("Upload a video to get started.")
