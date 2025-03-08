@@ -1,131 +1,156 @@
 import streamlit as st
-import os
 import cv2
 import numpy as np
+import os
+import tempfile
+import gdown
 from ultralytics import YOLO
+from datetime import datetime
+from itertools import combinations
 
-# Set Streamlit page configuration
-st.set_page_config(
-    page_title="ADNOC Aerial Insight",
-    page_icon="🛰️",
-    layout="wide"
-)
-
-# Define paths for assets
-LOGO_SIDEBAR = "assets/ADNOC-Logo.jpg"
-LOGO_TOP = "assets/ADNOC-Logo.png"
-
-# Sidebar with ADNOC branding
-with st.sidebar:
-    st.image(LOGO_SIDEBAR, width=200)
-    st.markdown(
-        '<p style="text-align:center; font-size:14px;">Developed as part of ADNOC’s Analytics & Data Science Initiative.</p>',
-        unsafe_allow_html=True
-    )
-
-# Main Title & Header
-st.image(LOGO_TOP, use_container_width=True)  # Top Logo Banner
-st.markdown("## ADNOC Aerial Insight: Collision Detection Platform")
-st.write(
-    "Upload a video, and the system will analyze object movement, detect potential collisions, "
-    "and provide a downloadable processed output."
-)
-
-# File uploader
-uploaded_file = st.file_uploader(
-    "Upload a Video", type=["mp4", "avi", "mov", "mpg", "mpeg"]
-)
-
-# Load YOLO model (Ensure the model is in the same directory or accessible)
+# ---------------------------- #
+# ✅ YOLO Model Download from Google Drive
+# ---------------------------- #
 MODEL_PATH = "bestt.pt"
+FILE_ID = "1-GINT3-FjNbBz3INmtudoDgDqKzQRBJt"
+GDRIVE_URL = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
 
-if not os.path.exists(MODEL_PATH):
-    st.error("Error: YOLO model file not found. Ensure `bestt.pt` is uploaded.")
-    st.stop()
+def download_model():
+    """Download the YOLO model from Google Drive if not present."""
+    if not os.path.exists(MODEL_PATH):
+        st.write("Downloading YOLO model from Google Drive...")
+        gdown.download(GDRIVE_URL, MODEL_PATH, quiet=False)
+        st.write("Model downloaded successfully.")
+    else:
+        st.write("Model already exists.")
 
+# ✅ Ensure the model is available
+download_model()
+
+# ✅ Load YOLO model
 model = YOLO(MODEL_PATH)
 
-# Collision Detection Parameters
-collision_threshold = 50  # Pixel distance for close collisions
-min_velocity_threshold = 5  # Minimum velocity for potential collision
-frame_buffer = 10  # Number of frames to consider for trajectory
+# ---------------------------- #
+# ✅ Streamlit UI Configuration
+# ---------------------------- #
+st.set_page_config(page_title="ADNOC Aerial Insight", layout="wide", initial_sidebar_state="expanded")
 
-# Process Uploaded Video
-if uploaded_file is not None:
-    st.video(uploaded_file)
+# ---------------------------- #
+# ✅ Custom Styling
+# ---------------------------- #
+st.markdown("""
+    <style>
+        .reportview-container {
+            background-color: #0e1117;
+        }
+        .css-18e3th9 {
+            background-color: #0e1117 !important;
+        }
+        .stTextInput>div>div>input {
+            background-color: #262730 !important;
+            color: white !important;
+        }
+        .stFileUploader>div>div>div>button {
+            background-color: #0055A4 !important;
+            color: white !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # Save file temporarily
-    video_ext = uploaded_file.name.split('.')[-1]
-    temp_video_path = f"temp_video.{video_ext}"
-    with open(temp_video_path, "wb") as f:
-        f.write(uploaded_file.read())
+# ---------------------------- #
+# ✅ ADNOC Branding (Header)
+# ---------------------------- #
+col1, col2 = st.columns([1, 4])
+with col1:
+    st.image("assets/ADNOC-Logo.jpg", width=150)
 
-    st.success("Video uploaded successfully! Processing...")
+with col2:
+    st.title("ADNOC Aerial Insight: Collision Detection Platform")
+    st.write("Upload a video, and the system will analyze object movement, detect potential collisions, and provide a downloadable processed output.")
 
-    # Open video for processing
-    cap = cv2.VideoCapture(temp_video_path)
+st.markdown("---")
+
+# ---------------------------- #
+# ✅ Video Upload
+# ---------------------------- #
+st.subheader("Upload a Video")
+uploaded_video = st.file_uploader("Drag and drop a file here", type=["mp4", "avi", "mov", "mpg", "mpeg"])
+
+if uploaded_video:
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    temp_file.write(uploaded_video.read())
+
+    st.success("✅ Video uploaded successfully!")
+
+    # ---------------------------- #
+    # ✅ Collision Detection Logic
+    # ---------------------------- #
+    st.subheader("Processing Video...")
+
+    # ✅ Define collision detection parameters
+    collision_threshold = 50  # Pixel distance for close collisions
+    min_velocity_threshold = 5  # Minimum velocity for potential collision
+
+    def calculate_velocity(positions, fps):
+        if len(positions) < 2:
+            return 0
+        (x1, y1), (x2, y2) = positions[-2], positions[-1]
+        distance = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+        velocity = distance * fps  # pixels per second
+        return velocity
+
+    # ✅ Process video with YOLO
+    video_source = temp_file.name
+    output_video = video_source.replace(".mp4", "_processed.mp4")
+
+    results = model.track(source=video_source, persist=True, save=False, conf=0.3, iou=0.5, tracker="bytetrack.yaml")
+
+    cap = cv2.VideoCapture(video_source)
     frame_width = int(cap.get(3))
     frame_height = int(cap.get(4))
     fps = int(cap.get(5))
 
-    # Output video path
-    output_video_path = f"processed_{uploaded_file.name}"
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
+    out = cv2.VideoWriter(output_video, fourcc, fps, (frame_width, frame_height))
 
     object_paths = {}
     object_velocities = {}
 
-    # Process each frame
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # Run YOLO detection
-        results = model.track(source=frame, persist=True, conf=0.3, iou=0.5, tracker="bytetrack.yaml")
-
-        detections = results[0].boxes  # Get detected objects
+    for i, result in enumerate(results):
+        frame = result.orig_img
+        detections = result.boxes
 
         for box in detections:
-            x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding box
-            obj_id = int(box.id[0]) if box.id is not None else None
+            if box.id is None:
+                continue
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            obj_id = int(box.id[0])
+            center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
 
-            if obj_id is not None:
-                center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
+            if obj_id not in object_paths:
+                object_paths[obj_id] = []
+            object_paths[obj_id].append((center_x, center_y))
+            object_paths[obj_id] = object_paths[obj_id][-30:]  # Keep last 30 positions
 
-                # Store trajectory
-                if obj_id not in object_paths:
-                    object_paths[obj_id] = []
-                object_paths[obj_id].append((center_x, center_y))
+            velocity = calculate_velocity(object_paths[obj_id], fps)
+            object_velocities[obj_id] = velocity
 
-                # Limit trajectory history
-                object_paths[obj_id] = object_paths[obj_id][-frame_buffer:]
+            color = (0, 255, 0) if velocity < min_velocity_threshold else (255, 0, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f"ID {obj_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-                # Draw trajectory
-                for j in range(1, len(object_paths[obj_id])):
-                    alpha = j / len(object_paths[obj_id])
-                    color = (0, int(255 * (1 - alpha)), int(255 * alpha))
-                    cv2.line(frame, object_paths[obj_id][j - 1], object_paths[obj_id][j], color, 2)
-
-                # Draw bounding box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(frame, f"ID {obj_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-
-        # Write frame to output video
         out.write(frame)
 
     cap.release()
     out.release()
 
-    # Provide download link
-    with open(output_video_path, "rb") as f:
-        st.download_button(
-            label="Download Processed Video",
-            data=f,
-            file_name=output_video_path,
-            mime="video/mp4"
-        )
+    # ✅ Display Processed Video
+    st.subheader("Processed Video")
+    st.video(output_video)
 
-    st.success("Processing complete! Download your video above.")
+    # ✅ Provide Download Link
+    with open(output_video, "rb") as file:
+        st.download_button(label="Download Processed Video", data=file, file_name="processed_video.mp4", mime="video/mp4")
+
+    st.success("✅ Processing Complete! Download your processed video above.")
 
