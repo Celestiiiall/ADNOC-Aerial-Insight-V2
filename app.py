@@ -18,7 +18,7 @@ if not os.path.exists(MODEL_PATH):
     urllib.request.urlretrieve(GDRIVE_MODEL_URL, MODEL_PATH)
 
 # Sidebar with ADNOC branding
-LOGO_PATH = "assets/ADNOC-Logo.jpg"
+LOGO_PATH = "assets/ADNOC-Logo.png"
 if os.path.exists(LOGO_PATH):
     st.sidebar.image(LOGO_PATH, use_container_width=True)
 else:
