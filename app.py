@@ -20,7 +20,7 @@ if not os.path.exists(MODEL_PATH):
 # Sidebar with ADNOC branding
 LOGO_PATH = "ADNOC-logo.jpg"
 if os.path.exists(LOGO_PATH):
-    st.sidebar.image(LOGO_PATH, use_column_width=True)
+    st.sidebar.image(LOGO_PATH, use_container_width=True)
 else:
     st.sidebar.warning("ADNOC logo missing!")
 
