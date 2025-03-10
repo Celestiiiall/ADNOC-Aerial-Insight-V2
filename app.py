@@ -9,7 +9,7 @@ from ultralytics import YOLO
 st.set_page_config(page_title="ADNOC Aerial Insight", layout="wide")
 
 # Sidebar with ADNOC branding
-st.sidebar.image("assets/adnoc_logo.jpg", use_column_width=True)
+st.sidebar.image("assets/adnoc_logo.jpg", use_container_width=True)
 st.sidebar.markdown(
     "### Developed as part of ADNOC's Analytics & Data Science Initiative."
 )
