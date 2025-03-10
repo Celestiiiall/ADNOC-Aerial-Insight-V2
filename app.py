@@ -1,75 +1,72 @@
 import streamlit as st
-import torch
 import cv2
 import numpy as np
-import gc
+import tempfile
+import os
 from ultralytics import YOLO
 
-# Function to load YOLO model only when needed (lazy loading)
-@st.cache_resource  # Caches model to prevent reloading
-def get_model():
-    return YOLO("bestt.pt")  # Load the YOLO model only when first called
+# Set Streamlit page config
+st.set_page_config(page_title="ADNOC Aerial Insight", layout="wide")
 
-# Function to process an image
-def process_image(image):
-    image = cv2.resize(image, (640, 640))  # Resize to reduce memory load
-    model = get_model()
+# Sidebar with ADNOC branding
+st.sidebar.image("assets/adnoc_logo.jpg", use_column_width=True)
+st.sidebar.markdown(
+    "### Developed as part of ADNOC's Analytics & Data Science Initiative."
+)
+
+# Main title
+st.title("ADNOC Aerial Insight: Collision Detection Platform")
+st.markdown(
+    "Upload a video, and the system will analyze object movement, detect collisions, and allow downloading the processed output."
+)
+
+# File uploader
+uploaded_file = st.file_uploader(
+    "Upload a Video",
+    type=["mp4", "avi", "mov", "mpg", "mpeg4"],
+    help="Limit 200MB per file",
+)
+
+if uploaded_file:
+    # Save the uploaded file temporarily
+    temp_dir = tempfile.mkdtemp()
+    video_path = os.path.join(temp_dir, uploaded_file.name)
+    with open(video_path, "wb") as f:
+        f.write(uploaded_file.read())
     
-    with torch.no_grad():  # Disable gradient tracking to save memory
-        results = model(image)
-    
-    del results  # Free memory
-    torch.cuda.empty_cache()
-    gc.collect()
+    st.video(video_path)
 
-    return "Processing completed."
+    # Process video using YOLO
+    st.write("Processing video for object detection and collision analysis...")
+    model = YOLO("bestt.pt")  # Ensure the model path is correct
 
-# Function to process a video (frame-by-frame)
-def process_video(video_path):
+    output_video_path = os.path.join(temp_dir, "output.mp4")
+
     cap = cv2.VideoCapture(video_path)
-    model = get_model()
+    frame_width = int(cap.get(3))
+    frame_height = int(cap.get(4))
+    fps = int(cap.get(5))
+    
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
     
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
         
-        frame = cv2.resize(frame, (640, 640))  # Resize to optimize memory
-        
-        with torch.no_grad():  # Disable unnecessary computations
-            results = model(frame)
-        
-        del results  # Free memory each frame
-        torch.cuda.empty_cache()
-        gc.collect()
+        results = model.track(source=frame, persist=True, conf=0.3, iou=0.5, tracker="bytetrack.yaml")
+        out.write(frame)
     
     cap.release()
-    return "Video processing completed."
-
-# Streamlit UI
-st.set_page_config(page_title="ADNOC Aerial Insight V2", layout="wide")
-st.title("🚀 ADNOC Aerial Insight V2")
-st.write("Upload an image or video for YOLO-based object detection.")
-
-# File uploader
-uploaded_file = st.file_uploader("Upload an image or video", type=["jpg", "jpeg", "png", "mp4"])
-
-if uploaded_file is not None:
-    file_bytes = uploaded_file.read()
-
-    # Handle Image Processing
-    if uploaded_file.type.startswith("image"):
-        st.image(uploaded_file, caption="Uploaded Image", use_column_width=True)
-        image = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
-        process_image(image)
-        st.success("✅ Image processed successfully.")
-
-    # Handle Video Processing
-    elif uploaded_file.type.startswith("video"):
-        video_path = f"/tmp/{uploaded_file.name}"  # Temporary file path
-        with open(video_path, "wb") as f:
-            f.write(file_bytes)
-        
-        st.video(video_path)
-        process_video(video_path)
-        st.success("✅ Video processed successfully.")
+    out.release()
+    
+    st.success("Processing complete!")
+    
+    with open(output_video_path, "rb") as file:
+        btn = st.download_button(
+            label="Download Processed Video",
+            data=file,
+            file_name="processed_video.mp4",
+            mime="video/mp4"
+        )
