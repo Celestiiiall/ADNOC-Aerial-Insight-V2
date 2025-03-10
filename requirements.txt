@@ -1,7 +1,6 @@
-streamlit
-opencv-python
+lap
 ultralytics
+opencv-python-headless
+streamlit
 numpy
 torch
-pandas
-gdown
